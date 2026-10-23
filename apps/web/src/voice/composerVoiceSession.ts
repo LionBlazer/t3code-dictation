@@ -18,6 +18,7 @@ export type ComposerVoiceCommit = {
 export type ComposerVoiceRecorderCallbacks = {
   readonly onError: (error: Error) => void;
   readonly onTranscript: (text: string) => void;
+  readonly onAudioReady?: (analyser: AnalyserNode) => void;
 };
 
 export type ComposerVoiceRecorder = {
@@ -48,22 +49,10 @@ export const IDLE_COMPOSER_VOICE_STATE: VoiceInputState = {
   errorAction: null,
 };
 
-export const VOICE_BUSY_SEND_DISABLED_REASON = "Finish voice input before sending";
-
 export const VOICE_CODEX_LOGIN_DISABLED_REASON = "Sign in with `codex login`";
 
 export const VOICE_COMPOSER_BUSY_DISABLED_REASON =
   "Voice input is unavailable while the composer is busy";
-
-export function resolveVoiceSendDisabledReason(input: {
-  readonly external: string | null;
-  readonly voiceBusy: boolean;
-  readonly fallback: string | null;
-}) {
-  return (
-    input.external ?? (input.voiceBusy ? VOICE_BUSY_SEND_DISABLED_REASON : null) ?? input.fallback
-  );
-}
 
 export function resolveVoiceMicAvailability(input: {
   readonly codexVoiceAvailable: boolean;
@@ -93,6 +82,48 @@ export function requestComposerMicrophone(): Promise<MediaStream> {
 
 /** Browser microphone/recorder adapter; lifecycle and draft ownership live in VoiceInputController. */
 export class ComposerVoiceSession extends VoiceInputController {
+  private starting: Promise<void> | null = null;
+  private stopping: Promise<void> | null = null;
+  private generation = 0;
+
+  override async start(): Promise<void> {
+    if (this.busy) return this.starting ?? Promise.resolve();
+    this.generation++;
+    this.stopping = null;
+    const operation = super.start();
+    this.starting = operation;
+    try {
+      await operation;
+    } finally {
+      if (this.starting === operation) this.starting = null;
+    }
+  }
+
+  override stop(): Promise<void> {
+    if (this.stopping) return this.stopping;
+    if (this.currentState.phase !== "recording") return super.stop();
+    this.stopping = super.stop();
+    return this.stopping;
+  }
+
+  async finishForSend(): Promise<boolean> {
+    const generation = this.generation;
+    await this.starting;
+    if (generation !== this.generation || this.currentState.phase === "error") return false;
+    await this.stop();
+    return generation === this.generation && this.currentState.phase === "idle";
+  }
+
+  override cancel(): void {
+    this.generation++;
+    super.cancel();
+  }
+
+  override dispose(): void {
+    this.generation++;
+    super.dispose();
+  }
+
   constructor(dependencies: ComposerVoiceSessionDependencies) {
     let revision = 0;
     let lastSeen: { ownerKey: string; text: string } | null = null;

@@ -3,7 +3,11 @@ import { startVoice, stopVoice } from "@t3tools/client-runtime/voice-input";
 import * as Schema from "effect/Schema";
 import { runtime } from "../lib/runtime";
 import { readPreparedConnection } from "../state/session";
-import { createBufferedVoiceAudio, type BufferedVoiceAudio } from "./bufferedVoiceAudio";
+import {
+  createBufferedVoiceAudio,
+  type BufferedVoiceAudio,
+  type PreparedVoiceAudio,
+} from "./bufferedVoiceAudio";
 import type {
   ComposerVoiceRecorder,
   ComposerVoiceRecorderCallbacks,
@@ -16,6 +20,14 @@ const TranscriptEvent = Schema.Struct({
 });
 const decodeTranscript = Schema.decodeUnknownOption(Schema.fromJsonString(TranscriptEvent));
 
+export function prepareCodexVoiceConnection() {
+  const peer = new RTCPeerConnection();
+  const channel = peer.createDataChannel("oai-events");
+  const sender = peer.addTransceiver("audio", { direction: "sendrecv" }).sender;
+  return { peer, channel, sender };
+}
+export type PreparedCodexVoiceConnection = ReturnType<typeof prepareCodexVoiceConnection>;
+
 // Only input transcripts are used: model answers must never become draft text.
 export function readVoiceTranscriptEvent(raw: string): { id: string; text: string } | null {
   const decoded = decodeTranscript(raw);
@@ -27,12 +39,14 @@ export function createCodexVoiceRecorder(
   instanceId: ProviderInstanceId,
   microphone: Promise<MediaStream>,
   callbacks: ComposerVoiceRecorderCallbacks,
+  preparation?: {
+    audio: PreparedVoiceAudio;
+    connection: PreparedCodexVoiceConnection;
+  },
 ): ComposerVoiceRecorder {
   const prepared = readPreparedConnection(environmentId);
   if (!prepared) throw new Error("Connect to the environment before dictating.");
-  const peer = new RTCPeerConnection();
-  const channel = peer.createDataChannel("oai-events");
-  const sender = peer.addTransceiver("audio", { direction: "sendrecv" }).sender;
+  const { peer, channel, sender } = preparation?.connection ?? prepareCodexVoiceConnection();
   let stream: MediaStream | null = null;
   let audio: BufferedVoiceAudio | null = null;
   let connecting: Promise<void> = Promise.resolve();
@@ -130,12 +144,13 @@ export function createCodexVoiceRecorder(
     stream = capture;
     if (!capture.getAudioTracks()[0]) throw new Error("No microphone audio track was available.");
     if (finishing) for (const track of capture.getAudioTracks()) track.enabled = false;
-    const buffered = await createBufferedVoiceAudio(capture, fail);
+    const buffered = await createBufferedVoiceAudio(capture, fail, preparation?.audio);
     if (disposed) {
       buffered.dispose();
       return;
     }
     audio = buffered;
+    callbacks.onAudioReady?.(buffered.analyser);
     await sender.replaceTrack(buffered.track);
   });
   void attachMicrophone.catch(() => {});

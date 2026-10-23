@@ -1,6 +1,11 @@
 import { EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { createCodexVoiceRecorder, readVoiceTranscriptEvent } from "./codexVoiceRecorder";
+import {
+  createCodexVoiceRecorder,
+  prepareCodexVoiceConnection,
+  readVoiceTranscriptEvent,
+} from "./codexVoiceRecorder";
+import type { PreparedVoiceAudio } from "./bufferedVoiceAudio";
 
 describe("Codex realtime transcription", () => {
   it("accepts user input chunks and ignores assistant speech and commands", () => {
@@ -146,6 +151,25 @@ describe("live recorder completion", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+  it("uses the prepared peer and audio graph without starting a request during warmup", async () => {
+    const connection = prepareCodexVoiceConnection();
+    expect(network.start).not.toHaveBeenCalled();
+    const preparedAudio = {} as PreparedVoiceAudio;
+    const onAudioReady = vi.fn();
+    const stream = { getAudioTracks: () => [{}], getTracks: () => [] } as unknown as MediaStream;
+    const recorder = createCodexVoiceRecorder(
+      EnvironmentId.make("env"),
+      ProviderInstanceId.make("codex"),
+      Promise.resolve(stream),
+      { onTranscript: vi.fn(), onError: vi.fn(), onAudioReady },
+      { audio: preparedAudio, connection },
+    );
+    expect(VoicePeer.current).toBe(connection.peer);
+    await recorder.start();
+    expect(audio.create).toHaveBeenCalledWith(stream, expect.any(Function), preparedAudio);
+    expect(onAudioReady).toHaveBeenCalledTimes(1);
+    recorder.dispose();
   });
   it("pins start and cleanup to the selected environment and account", async () => {
     const { recorder } = createRecorderHarness();

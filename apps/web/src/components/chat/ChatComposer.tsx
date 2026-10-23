@@ -1,6 +1,10 @@
 import { useComposerTypingGuard } from "./useComposerTypingGuard";
 import { ComposerVoiceInput } from "./ComposerVoiceInput";
-import type { ComposerVoiceCommit, ComposerVoiceDraft } from "../../voice/composerVoiceSession";
+import type {
+  ComposerVoiceCommit,
+  ComposerVoiceDraft,
+  ComposerVoiceSession,
+} from "../../voice/composerVoiceSession";
 import { insertAttachmentReferencesForDraft } from "./composerAttachmentReferences";
 import { DESKTOP_PASTE_AS_TEXT_EVENT } from "../../lib/desktopPasteAsText";
 import { runtimeModeConfig, runtimeModeOptions as runtimeModes } from "./runtimeModeConfig";
@@ -989,14 +993,21 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     selectedModel,
   );
   const [voiceInputBusy, setVoiceInputBusy] = useState(false);
-  const sendDisabledReason = voiceInputBusy
-    ? "Finish voice input before sending"
-    : (externalSendDisabledReason ??
-      (multipleModelSelections?.length === 0 ? "Select at least one model." : null) ??
-      (activePendingProgress
-        ? attachmentBlockReason
-        : (attachmentBlockReason ??
-          (multipleModelSelections === null ? providerSendBlockReason : null))));
+  const voiceSessionRef = useRef<ComposerVoiceSession | null>(null);
+  const voiceSendPendingRef = useRef(false);
+  const [voiceSendPending, setVoiceSendPending] = useState(false);
+  const setVoiceSession = useStableCallback((session: ComposerVoiceSession | null) => {
+    voiceSessionRef.current = session;
+    voiceSendPendingRef.current = false;
+    setVoiceSendPending(false);
+  });
+  const sendDisabledReason =
+    externalSendDisabledReason ??
+    (multipleModelSelections?.length === 0 ? "Select at least one model." : null) ??
+    (activePendingProgress
+      ? attachmentBlockReason
+      : (attachmentBlockReason ??
+        (multipleModelSelections === null ? providerSendBlockReason : null)));
   const isSendDisabled = sendDisabledReason !== null;
   const selectedProviderStatus = selectedProviderEntry?.snapshot ?? null;
   const compactCommandAvailable = providerSupportsManualCompaction(selectedProviderEntry);
@@ -1299,11 +1310,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         questionIndex: activePendingProgress.questionIndex,
         isLastQuestion: activePendingProgress.isLastQuestion,
         canAdvance:
-          activePendingProgress.canAdvance &&
+          (activePendingProgress.canAdvance || voiceInputBusy) &&
           !attachmentBlockReason &&
           !(questionPreparations[attachmentTargetKey] ?? 0),
-        isResponding: activePendingIsResponding,
-        isComplete: Boolean(activePendingResolvedAnswers),
+        isResponding: activePendingIsResponding || voiceSendPending,
+        isComplete: Boolean(activePendingResolvedAnswers) || voiceInputBusy,
       }
     : null;
   const showResumeAction =
@@ -2111,7 +2122,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     return showPlanFollowUpPrompt || composerSendState.hasSendableContent;
   };
 
-  const submitComposer = (
+  const dispatchComposer = (
     event?: { preventDefault: () => void },
     dispatchMode?: ComposerDispatchMode,
     submissionIntent?: ComposerSubmissionIntent,
@@ -2119,6 +2130,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (
       noProviderAvailable ||
       isSendDisabled ||
+      voiceSendPendingRef.current ||
       !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)
     ) {
       event?.preventDefault();
@@ -2171,6 +2183,43 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (shouldBlurMobileComposerOnSubmit()) {
       blurMobileComposerAfterSend();
     }
+  };
+  const dispatchComposerStable = useStableCallback(dispatchComposer);
+  const submitComposer = (
+    event?: { preventDefault: () => void },
+    dispatchMode?: ComposerDispatchMode,
+    submissionIntent?: ComposerSubmissionIntent,
+  ) => {
+    const voiceSession = voiceSessionRef.current;
+    if (!voiceSession?.busy) {
+      dispatchComposerStable(event, dispatchMode, submissionIntent);
+      return;
+    }
+    event?.preventDefault();
+    if (
+      voiceSendPendingRef.current ||
+      isSendDisabled ||
+      noProviderAvailable ||
+      !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)
+    )
+      return;
+    voiceSendPendingRef.current = true;
+    setVoiceSendPending(true);
+    void voiceSession.finishForSend().then(
+      (ready) => {
+        if (voiceSessionRef.current !== voiceSession) return;
+        voiceSendPendingRef.current = false;
+        setVoiceSendPending(false);
+        // Final words update promptRef synchronously. The current dispatcher
+        // rechecks permissions and attachments before taking the send snapshot.
+        if (ready) dispatchComposerStable(undefined, dispatchMode, submissionIntent);
+      },
+      () => {
+        if (voiceSessionRef.current !== voiceSession) return;
+        voiceSendPendingRef.current = false;
+        setVoiceSendPending(false);
+      },
+    );
   };
   const submitComposerStable = useStableCallback(submitComposer);
   const handleSubmitMessage = (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -3088,6 +3137,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const voiceOwnerSuffix = activePendingProgress?.activeQuestion
     ? `${activePendingUserInput?.requestId}:${activePendingProgress.questionIndex}:${activePendingProgress.activeQuestion.id}`
     : "composer";
+  const voiceOwnerKey = `${environmentId}:${composerTargetKey(composerDraftTarget)}:${voiceOwnerSuffix}`;
   const readVoiceDraft = useStableCallback((): ComposerVoiceDraft => {
     const snapshot = readComposerSnapshotStable();
     const selection = composerEditorRef.current?.readSelectionRange();
@@ -3952,7 +4002,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   )}
                 >
                   <ComposerVoiceInput
-                    key={`${environmentId}:${composerTargetKey(composerDraftTarget)}:${voiceOwnerSuffix}`}
+                    key={voiceOwnerKey}
+                    onSessionChange={setVoiceSession}
                     instanceIds={dictationInstanceIds}
                     primary={!prompt.trim()}
                     environmentId={environmentId}
@@ -3994,8 +4045,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     showPlanFollowUpPrompt={
                       pendingUserInputs.length === 0 && showPlanFollowUpPrompt
                     }
-                    promptHasText={prompt.trim().length > 0}
-                    isSendBusy={isSendBusy}
+                    promptHasText={prompt.trim().length > 0 || voiceInputBusy}
+                    isSendBusy={isSendBusy || voiceSendPending}
                     sendDisabledReason={sendDisabledReason}
                     isConnecting={isConnecting}
                     isEnvironmentUnavailable={
@@ -4004,8 +4055,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       projectSelectionRequired
                     }
                     isPreparingWorktree={isPreparingWorktree}
-                    hasSendableContent={composerSendState.hasSendableContent}
-                    canResume={showResumeAction}
+                    hasSendableContent={composerSendState.hasSendableContent || voiceInputBusy}
+                    canResume={showResumeAction && !voiceInputBusy}
                     preserveComposerFocusOnPointerDown={isMobileViewport || isComposerResting}
                     isEditingQueuedMessage={isEditingQueuedMessage}
                     onSubmitMessage={handleSubmitMessageStable}

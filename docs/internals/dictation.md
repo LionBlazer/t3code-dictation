@@ -31,6 +31,11 @@ into the same WebRTC track before live samples. Stopping during connection keeps
 the captured phrase and waits for its audio and transcript to finish. Cancellation
 disposes the buffer and microphone. Audio is never written to a recording file.
 
+The capture context and worklet are prepared while idle without opening a device.
+The waveform reads an analyser on that same context; it must not open a second
+audio device on the click path. Send joins the active preparation or stop and
+revalidates the draft owner and current send permissions after final words arrive.
+
 This uses the experimental Codex realtime interface from PR #12275, rather than a
 stable standalone transcription API. Successful authentication alone cannot prove
 that an account's current rollout includes realtime access; the handshake remains

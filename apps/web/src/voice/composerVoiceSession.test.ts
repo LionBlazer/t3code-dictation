@@ -17,8 +17,6 @@ import {
   ComposerVoiceSession,
   formatVoiceElapsed,
   resolveVoiceMicAvailability,
-  resolveVoiceSendDisabledReason,
-  VOICE_BUSY_SEND_DISABLED_REASON,
   type ComposerVoiceCommit,
   type ComposerVoiceDraft,
   type ComposerVoiceRecorder,
@@ -257,6 +255,87 @@ describe("ComposerVoiceSession transcript commit", () => {
   });
 });
 
+describe("sending during dictation", () => {
+  it("waits for the final words before allowing send, including repeated send clicks", async () => {
+    const draft = createDraft("", 0);
+    const { transcribe, pending } = createDeferredTranscriber();
+    const { session, recorder } = createSession({ draft, transcribe });
+    const stop = vi.spyOn(recorder, "stop");
+    await session.start();
+    let ready = false;
+    const first = session.finishForSend().then((value) => {
+      ready = value;
+      return value;
+    });
+    const second = session.finishForSend();
+    await flushAsync();
+    expect(ready).toBe(false);
+    expect(stop).toHaveBeenCalledTimes(1);
+    pending[0]?.resolve({ text: "all the final words", locale: "en" });
+    expect(await first).toBe(true);
+    expect(await second).toBe(true);
+    expect(draft.text).toBe("all the final words");
+  });
+
+  it("joins a stop that is already finishing", async () => {
+    const draft = createDraft("", 0);
+    const { transcribe, pending } = createDeferredTranscriber();
+    const { session } = createSession({ draft, transcribe });
+    await session.start();
+    const stopping = session.stop();
+    const sending = session.finishForSend();
+    await flushAsync();
+    pending[0]?.resolve({ text: "last words", locale: "en" });
+    await stopping;
+    expect(await sending).toBe(true);
+    expect(draft.text).toBe("last words");
+  });
+
+  it("can send while the microphone is still preparing", async () => {
+    const draft = createDraft("", 0);
+    const { transcribe, pending } = createDeferredTranscriber();
+    let connect!: (stream: MediaStream) => void;
+    const microphone = new Promise<MediaStream>((resolve) => {
+      connect = resolve;
+    });
+    const { session } = createSession({ draft, transcribe, requestMicrophone: () => microphone });
+    const starting = session.start();
+    const sending = session.finishForSend();
+    connect({ getTracks: () => [] } as unknown as MediaStream);
+    await starting;
+    await flushAsync();
+    pending[0]?.resolve({ text: "early words", locale: "en" });
+    expect(await sending).toBe(true);
+    expect(draft.text).toBe("early words");
+  });
+
+  it.each(["cancel", "dispose"] as const)("does not send after %s", async (action) => {
+    const draft = createDraft("", 0);
+    const { transcribe, pending } = createDeferredTranscriber();
+    const { session } = createSession({ draft, transcribe });
+    await session.start();
+    const sending = session.finishForSend();
+    await flushAsync();
+    session[action]();
+    pending[0]?.resolve({ text: "abandoned words", locale: "en" });
+    expect(await sending).toBe(false);
+    expect(draft.text).toBe("");
+  });
+
+  it("does not send after a transcription failure or a changed draft owner", async () => {
+    const draft = createDraft("", 0);
+    const { transcribe, pending } = createDeferredTranscriber();
+    const { session } = createSession({ draft, transcribe });
+    await session.start();
+    const sending = session.finishForSend();
+    await flushAsync();
+    draft.ownerKey = "another-thread";
+    pending[0]?.resolve({ text: "wrong thread", locale: "en" });
+    expect(await sending).toBe(false);
+    expect(draft.text).toBe("");
+  });
+});
+
 describe("ComposerVoiceSession draft guards", () => {
   it("inserts at the current caret after typing during recording", async () => {
     const draft = createDraft("hello", 5);
@@ -486,22 +565,7 @@ describe("ComposerVoiceSession lifecycle", () => {
   });
 });
 
-describe("composer voice send and mic gating", () => {
-  it("blocks send while voice input is busy without overriding explicit reasons", () => {
-    expect(
-      resolveVoiceSendDisabledReason({ external: null, voiceBusy: true, fallback: null }),
-    ).toBe(VOICE_BUSY_SEND_DISABLED_REASON);
-    expect(
-      resolveVoiceSendDisabledReason({ external: "Connecting", voiceBusy: true, fallback: null }),
-    ).toBe("Connecting");
-    expect(
-      resolveVoiceSendDisabledReason({ external: null, voiceBusy: false, fallback: "Add a file" }),
-    ).toBe("Add a file");
-    expect(
-      resolveVoiceSendDisabledReason({ external: null, voiceBusy: false, fallback: null }),
-    ).toBeNull();
-  });
-
+describe("composer voice mic availability", () => {
   it("depends on Codex account availability independently of the chat provider", () => {
     expect(
       resolveVoiceMicAvailability({

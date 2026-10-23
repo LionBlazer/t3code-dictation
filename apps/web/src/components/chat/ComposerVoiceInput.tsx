@@ -12,7 +12,13 @@ import { VoiceWaveform } from "./VoiceWaveform";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { createCodexVoiceRecorder } from "../../voice/codexVoiceRecorder";
+import {
+  createCodexVoiceRecorder,
+  prepareCodexVoiceConnection,
+  type PreparedCodexVoiceConnection,
+} from "../../voice/codexVoiceRecorder";
+import { prepareVoiceAudio, type PreparedVoiceAudio } from "../../voice/bufferedVoiceAudio";
+import { useStableCallback } from "../../hooks/useStableCallback";
 import { useCodexVoiceAvailability } from "../../voice/codexVoiceAvailability";
 import {
   ComposerVoiceSession,
@@ -29,6 +35,7 @@ export const ComposerVoiceInput = memo(function ComposerVoiceInput(props: Compos
 });
 
 type ComposerVoiceInputProps = {
+  readonly onSessionChange: (session: ComposerVoiceSession | null) => void;
   readonly composerDisabled: boolean;
   readonly readDraft: () => ComposerVoiceDraft | null;
   readonly commitDraft: (commit: ComposerVoiceCommit) => boolean;
@@ -42,7 +49,9 @@ type ComposerVoiceInputProps = {
 function CodexComposerVoiceInput(props: ComposerVoiceInputProps) {
   const [voiceState, setVoiceState] = useState<VoiceInputState>(IDLE_COMPOSER_VOICE_STATE);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const [captureStream, setCaptureStream] = useState<MediaStream | null>(null);
+  const [analyser, setAnalyser] = useState<AnalyserNode | null>(null);
+  const audioPreparationRef = useRef<PreparedVoiceAudio | null>(null);
+  const connectionPreparationRef = useRef<PreparedCodexVoiceConnection | null>(null);
   const dictation = useEnvironmentSettings(props.environmentId, (settings) => settings.dictation);
   const formatTranscript = createDictationFormatter(dictation);
   const {
@@ -51,11 +60,39 @@ function CodexComposerVoiceInput(props: ComposerVoiceInputProps) {
     prepare: prepareVoice,
   } = useCodexVoiceAvailability(props.environmentId, props.instanceIds, true);
 
+  const warmCapture = useStableCallback(() => {
+    try {
+      audioPreparationRef.current ??= prepareVoiceAudio();
+      connectionPreparationRef.current ??= prepareCodexVoiceConnection();
+    } catch {
+      // Actual capture reports unsupported devices and permissions in the composer.
+    }
+  });
+  useEffect(() => {
+    if (!serverVoiceAvailable || voiceInputBlocksSubmission(voiceState)) return;
+    const idle = window.requestIdleCallback(warmCapture, { timeout: 1000 });
+    return () => window.cancelIdleCallback(idle);
+  }, [serverVoiceAvailable, voiceState, warmCapture]);
+  useEffect(
+    () => () => {
+      audioPreparationRef.current?.dispose();
+      audioPreparationRef.current = null;
+      connectionPreparationRef.current?.peer.close();
+      connectionPreparationRef.current = null;
+    },
+    [],
+  );
+  const prepareInput = useStableCallback(() => {
+    warmCapture();
+    prepareVoice();
+  });
+
   const latestRef = useRef({
     readDraft: props.readDraft,
     commitDraft: props.commitDraft,
     formatTranscript,
     voiceInstanceId,
+    onSessionChange: props.onSessionChange,
   });
   const busyRef = useRef(props.onBusyChange);
   useLayoutEffect(() => {
@@ -64,6 +101,7 @@ function CodexComposerVoiceInput(props: ComposerVoiceInputProps) {
       commitDraft: props.commitDraft,
       formatTranscript,
       voiceInstanceId,
+      onSessionChange: props.onSessionChange,
     };
     busyRef.current = props.onBusyChange;
   });
@@ -78,35 +116,40 @@ function CodexComposerVoiceInput(props: ComposerVoiceInputProps) {
       readDraft: () => latestRef.current.readDraft(),
       commitDraft: (commit) => latestRef.current.commitDraft(commit),
       formatTranscript: (text) => latestRef.current.formatTranscript(text),
-      requestMicrophone: async () => {
-        const stream = await requestComposerMicrophone();
-        if (sessionRef.current === session && session.busy) setCaptureStream(stream);
-        return stream;
-      },
+      requestMicrophone: requestComposerMicrophone,
       createRecorder: (stream, callbacks) => {
         const instanceId = latestRef.current.voiceInstanceId;
         if (!instanceId) throw new Error("Sign in to a Codex account to use dictation.");
+        const audio = audioPreparationRef.current ?? prepareVoiceAudio();
+        audioPreparationRef.current = audio;
+        const connection = connectionPreparationRef.current ?? prepareCodexVoiceConnection();
+        connectionPreparationRef.current = null;
         const recorder = createCodexVoiceRecorder(
           props.environmentId,
           instanceId,
           stream,
-          callbacks,
+          {
+            ...callbacks,
+            onAudioReady: (node) => {
+              if (sessionRef.current === session && session.busy) setAnalyser(node);
+            },
+          },
+          { audio, connection },
         );
         return recorder;
       },
       onStateChange: (next) => {
         setVoiceState(next);
-        if (next.phase !== "recording" && next.phase !== "preparing") setCaptureStream(null);
+        if (next.phase !== "recording" && next.phase !== "preparing") setAnalyser(null);
         busyRef.current?.(voiceInputBlocksSubmission(next));
       },
     });
     sessionRef.current = session;
+    latestRef.current.onSessionChange(session);
     return () => {
       session.dispose();
       sessionRef.current = null;
-      // The parent keys this input by draft target and lifts `busy` to gate
-      // Send. dispose() emits no state change, so clear the lifted flag here;
-      // otherwise a target switch mid-recording leaves Send disabled forever.
+      latestRef.current.onSessionChange(null);
       busyRef.current?.(false);
     };
   }, [props.environmentId]);
@@ -132,7 +175,6 @@ function CodexComposerVoiceInput(props: ComposerVoiceInputProps) {
   const handleStart = () => {
     setElapsedSeconds(0);
     props.focusDraft();
-    prepareVoice();
     void sessionRef.current?.start();
   };
 
@@ -154,8 +196,8 @@ function CodexComposerVoiceInput(props: ComposerVoiceInputProps) {
                   size="icon-sm"
                   onPointerDown={(event) => event.preventDefault()}
                   onClick={handleStart}
-                  onPointerEnter={prepareVoice}
-                  onFocus={prepareVoice}
+                  onPointerEnter={prepareInput}
+                  onFocus={prepareInput}
                   aria-label="Dictate"
                   data-chat-composer-voice="idle"
                 />
@@ -220,7 +262,7 @@ function CodexComposerVoiceInput(props: ComposerVoiceInputProps) {
             >
               <XIcon className="size-4" />
             </Button>
-            <VoiceWaveform stream={captureStream} />
+            <VoiceWaveform analyser={analyser} />
             <span
               className="shrink-0 text-xs text-muted-foreground tabular-nums"
               aria-label="Recording time"

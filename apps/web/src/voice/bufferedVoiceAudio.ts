@@ -1,4 +1,5 @@
-import workletUrl from "./voiceAudioBuffer.worklet.js?url";
+// The desktop CSP rejects data URLs, so even this small module must be emitted as a file.
+import workletUrl from "./voiceAudioBuffer.worklet.js?url&no-inline";
 
 export type BufferedVoiceAudio = {
   readonly track: MediaStreamTrack;

@@ -1,4 +1,6 @@
 import { useComposerTypingGuard } from "./useComposerTypingGuard";
+import { ComposerVoiceInput } from "./ComposerVoiceInput";
+import type { ComposerVoiceCommit, ComposerVoiceDraft } from "../../voice/composerVoiceSession";
 import { insertAttachmentReferencesForDraft } from "./composerAttachmentReferences";
 import { DESKTOP_PASTE_AS_TEXT_EVENT } from "../../lib/desktopPasteAsText";
 import { runtimeModeConfig, runtimeModeOptions as runtimeModes } from "./runtimeModeConfig";
@@ -986,13 +988,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     selectedProviderEntry?.snapshot,
     selectedModel,
   );
-  const sendDisabledReason =
-    externalSendDisabledReason ??
-    (multipleModelSelections?.length === 0 ? "Select at least one model." : null) ??
-    (activePendingProgress
-      ? attachmentBlockReason
-      : (attachmentBlockReason ??
-        (multipleModelSelections === null ? providerSendBlockReason : null)));
+  const [voiceInputBusy, setVoiceInputBusy] = useState(false);
+  const sendDisabledReason = voiceInputBusy
+    ? "Finish voice input before sending"
+    : (externalSendDisabledReason ??
+      (multipleModelSelections?.length === 0 ? "Select at least one model." : null) ??
+      (activePendingProgress
+        ? attachmentBlockReason
+        : (attachmentBlockReason ??
+          (multipleModelSelections === null ? providerSendBlockReason : null))));
   const isSendDisabled = sendDisabledReason !== null;
   const selectedProviderStatus = selectedProviderEntry?.snapshot ?? null;
   const compactCommandAvailable = providerSupportsManualCompaction(selectedProviderEntry);
@@ -2350,6 +2354,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     return nonPersistedComposerImageIdSet.has(image.id) && !failedInCurrentEnvironment;
   });
   const composerHasExpandedChrome =
+    voiceInputBusy ||
     showComposerTopDrawer ||
     isTasksDrawerOpen ||
     composerMenuOpen ||
@@ -3069,6 +3074,49 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     setIsComposerModelPickerOpen(true);
   };
   const openModelPickerStable = useStableCallback(openModelPicker);
+
+  const dictationInstanceIds = providerInstanceEntries
+    .filter(
+      (entry) =>
+        entry.driverKind === "codex" && entry.enabled && entry.installed && entry.isAvailable,
+    )
+    .toSorted(
+      (a, b) =>
+        Number(b.instanceId === selectedInstanceId) - Number(a.instanceId === selectedInstanceId),
+    )
+    .map((entry) => entry.instanceId);
+  const voiceOwnerSuffix = activePendingProgress?.activeQuestion
+    ? `${activePendingUserInput?.requestId}:${activePendingProgress.questionIndex}:${activePendingProgress.activeQuestion.id}`
+    : "composer";
+  const readVoiceDraft = useStableCallback((): ComposerVoiceDraft => {
+    const snapshot = readComposerSnapshotStable();
+    const selection = composerEditorRef.current?.readSelectionRange();
+    return {
+      ownerKey: `${environmentId}:${composerTargetKey(composerDraftTarget)}:${voiceOwnerSuffix}`,
+      text: snapshot.value,
+      selectionStart: selection?.start ?? snapshot.expandedCursor,
+      selectionEnd: selection?.end ?? snapshot.expandedCursor,
+    };
+  });
+  const commitVoiceTranscript = useStableCallback((commit: ComposerVoiceCommit) =>
+    applyPromptReplacementStable(commit.rangeStart, commit.rangeEnd, commit.insertion, {
+      expectedText: commit.expectedText,
+      focusEditorAfterReplace: false,
+    }),
+  );
+  const focusVoiceDraft = useStableCallback(() =>
+    composerEditorRef.current?.focusPreservingSelection(),
+  );
+  const composerVoiceDisabled =
+    !canOperateThread ||
+    isConnecting ||
+    environmentUnavailable !== null ||
+    activePendingApproval !== null ||
+    projectSelectionRequired ||
+    activePendingIsResponding ||
+    (pendingUserInputs.length > 0 &&
+      (!activePendingProgress?.activeQuestion ||
+        activePendingProgress.activeQuestion.allowCustomAnswer === false));
 
   useImperativeHandle(
     composerRef,
@@ -3885,7 +3933,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   data-chat-composer-footer-controls="true"
                   className={cn(
                     "relative -m-1 -ms-3.5 flex min-w-0 flex-1 items-center gap-1 overflow-x-auto p-1 ps-3.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
-                    isComposerResting && "hidden",
+                    (isComposerResting || voiceInputBusy) && "hidden",
                   )}
                 >
                   {composerControlsCollapsed ? null : composerControls}
@@ -3898,9 +3946,23 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   data-chat-composer-primary-actions-compact={
                     isComposerPrimaryActionsCompact ? "true" : "false"
                   }
-                  className="flex shrink-0 flex-nowrap items-center justify-end gap-2"
+                  className={cn(
+                    "flex min-w-0 flex-nowrap items-center justify-end gap-2",
+                    voiceInputBusy ? "flex-1" : "shrink-0",
+                  )}
                 >
-                  {composerAttachButton}
+                  <ComposerVoiceInput
+                    key={`${environmentId}:${composerTargetKey(composerDraftTarget)}:${voiceOwnerSuffix}`}
+                    instanceIds={dictationInstanceIds}
+                    primary={!prompt.trim()}
+                    environmentId={environmentId}
+                    composerDisabled={composerVoiceDisabled}
+                    readDraft={readVoiceDraft}
+                    commitDraft={commitVoiceTranscript}
+                    focusDraft={focusVoiceDraft}
+                    onBusyChange={setVoiceInputBusy}
+                  />
+                  {!voiceInputBusy && composerAttachButton}
                   <ComposerFooterPrimaryActions
                     compact={isComposerResting || isComposerPrimaryActionsCompact}
                     canOperateThread={canOperateThread}

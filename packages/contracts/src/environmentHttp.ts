@@ -1,4 +1,5 @@
 import * as Context from "effect/Context";
+import * as Voice from "./voice.ts";
 import type * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/http-api/HttpApi";
@@ -842,7 +843,59 @@ class EnvironmentWebhooksHttpApi extends HttpApiGroup.make("webhooks")
   .add(HttpApiEndpoint.patch("webhookPatch", WEBHOOK_PATH, webhookEndpoint))
   .add(HttpApiEndpoint.get("webhookGet", WEBHOOK_PATH, webhookEndpoint)) {}
 
+const VoiceErrors = [
+  Voice.VoiceRequestError,
+  Voice.VoiceAccessError,
+  Voice.VoiceConnectionError,
+  EnvironmentAuthInvalidError,
+  EnvironmentScopeRequiredError,
+  EnvironmentInternalError,
+] as const;
+
+class EnvironmentVoiceHttpApi extends HttpApiGroup.make("voice")
+  .add(
+    HttpApiEndpoint.post("availability", "/api/voice/availability", {
+      headers: OptionalBearerHeaders,
+      payload: Voice.VoiceAvailabilityQuery,
+      success: Voice.VoiceAvailabilityResponse,
+      error: VoiceErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("start", "/api/voice/start", {
+      headers: OptionalBearerHeaders,
+      payload: Voice.VoiceStartRequest,
+      success: Voice.VoiceStartResponse,
+      error: VoiceErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("stop", "/api/voice/stop", {
+      headers: OptionalBearerHeaders,
+      payload: Voice.VoiceStopRequest,
+      success: Schema.Void,
+      error: VoiceErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("finish", "/api/voice/finish", {
+      headers: OptionalBearerHeaders,
+      payload: Voice.VoiceFinishRequest,
+      success: Voice.VoiceFinishResponse,
+      error: VoiceErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("polish", "/api/voice/polish", {
+      headers: OptionalBearerHeaders,
+      payload: Voice.VoicePolishRequest,
+      success: Voice.VoiceFinishResponse,
+      error: VoiceErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
+
 export class EnvironmentHttpApi extends HttpApi.make("environment")
+  .add(EnvironmentVoiceHttpApi)
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
   .add(EnvironmentMcpOAuthHttpApi)

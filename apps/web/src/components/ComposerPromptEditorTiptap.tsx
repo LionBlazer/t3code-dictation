@@ -127,6 +127,7 @@ import type { ComposerDraftContextRecords } from "./composerContextPresentation"
 
 export interface ComposerPromptEditorHandle {
   focus: () => void;
+  focusPreservingSelection: () => void;
   focusAt: (cursor: number) => void;
   focusAtEnd: () => void;
   readSelectionRange: () => { start: number; end: number };
@@ -1721,6 +1722,9 @@ function ComposerPromptEditorTiptapInner(
   useImperativeHandle(
     editorRef,
     () => ({
+      focusPreservingSelection: () => {
+        editor?.commands.focus(undefined, { scrollIntoView: false });
+      },
       focus: () => {
         // The collapsed cursor cannot say where inside `$name` text a caret
         // sits, so restoring the caret passes along its exact offset.

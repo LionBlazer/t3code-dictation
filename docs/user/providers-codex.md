@@ -2,6 +2,16 @@
 
 Use your ChatGPT plan or an existing Codex CLI login to code in T3 Code.
 
+## Dictate a message
+
+Connect at least one Codex account with a ChatGPT plan, then use the microphone
+in the chat composer. Dictation works with any selected chat model. Stop recording
+to finish the transcript, edit the text, and send it when ready.
+
+You can start speaking as soon as recording starts, while the transcription
+connection finishes in the background. Dictation only adds text to your draft;
+it does not send messages or start a voice conversation.
+
 ## Connect with ChatGPT
 
 Connect during onboarding or in **Settings → Providers**. For a remote machine,

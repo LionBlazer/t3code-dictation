@@ -1,3 +1,4 @@
+import { DictationReplacement, DictationSettings, DEFAULT_DICTATION_SETTINGS } from "./voice.ts";
 import { EasDeviceHostConfigs, SshDeviceHostConfigs } from "./device.ts";
 import {
   AuthOrchestrationOperateScope,
@@ -1130,6 +1131,9 @@ export const StorageCleanupSettings = Schema.Struct({
 export type StorageCleanupSettings = typeof StorageCleanupSettings.Type;
 
 export const ServerSettings = Schema.Struct({
+  dictation: DictationSettings.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_DICTATION_SETTINGS)),
+  ),
   // Null means no client has migrated this preference yet; an empty value is
   // authoritative so another device cannot resurrect cleared preferences.
   favorites: Schema.NullOr(ModelFavorites).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
@@ -1476,6 +1480,16 @@ const ModelSelectionPatch = Schema.Struct({
 });
 
 export const ServerSettingsPatch = Schema.Struct({
+  dictation: Schema.optionalKey(
+    Schema.Struct({
+      autoPolish: Schema.optionalKey(Schema.Boolean),
+      spokenCommands: Schema.optionalKey(Schema.Boolean),
+      removeFillers: Schema.optionalKey(Schema.Boolean),
+      replacements: Schema.optionalKey(
+        Schema.Array(DictationReplacement).check(Schema.isMaxLength(200)),
+      ),
+    }),
+  ),
   setModelFavorites: Schema.optionalKey(
     Schema.Array(Schema.Struct({ ...ModelFavorite.fields, favorite: Schema.Boolean })),
   ),

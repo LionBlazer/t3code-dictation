@@ -14,6 +14,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as Electron from "electron";
 import { vi } from "vite-plus/test";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 vi.mock("electron", async (importOriginal) => ({
   ...(await importOriginal<typeof import("electron")>()),
@@ -116,6 +117,7 @@ function makeFakeBrowserWindow() {
     setFullScreen: vi.fn(),
     setOpacity: vi.fn(),
     setTitle: vi.fn(),
+    setAppDetails: vi.fn(),
     setTitleBarOverlay: vi.fn(),
     setWindowButtonPosition: vi.fn(),
     show: vi.fn(),
@@ -143,6 +145,7 @@ function makeFakeBrowserWindow() {
     setAutoHideCursor: window.setAutoHideCursor,
     setFullScreen: window.setFullScreen,
     setOpacity: window.setOpacity,
+    setAppDetails: window.setAppDetails,
     webContentsListeners,
     webContentsOnce: webContents.once,
     windowListeners,
@@ -193,17 +196,21 @@ const layerElectronTheme = Layer.succeed(ElectronTheme.ElectronTheme, {
   onUpdated: () => Effect.void,
 } satisfies ElectronTheme.ElectronTheme["Service"]);
 
-const layerDesktopEnvironment = DesktopEnvironment.layer(environmentInput).pipe(
-  Layer.provide(
-    Layer.mergeAll(
-      NodeServices.layer,
-      DesktopConfig.layerTest({
-        T3CODE_PORT: "3773",
-        VITE_DEV_SERVER_URL: "http://127.0.0.1:5733",
-      }),
+const makeEnvironmentLayer = (
+  overrides: Partial<DesktopEnvironment.MakeDesktopEnvironmentInput> = {},
+) =>
+  DesktopEnvironment.layer({ ...environmentInput, ...overrides }).pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        NodeServices.layer,
+        DesktopConfig.layerTest({
+          T3CODE_PORT: "3773",
+          ...(overrides.isPackaged ? {} : { VITE_DEV_SERVER_URL: "http://127.0.0.1:5733" }),
+        }),
+      ),
     ),
-  ),
-);
+  );
+const layerDesktopEnvironment = makeEnvironmentLayer();
 
 const desktopWindowBoundsEquivalence = Schema.toEquivalence(
   DesktopAppSettings.DesktopWindowBoundsSchema,
@@ -229,6 +236,7 @@ function layerTest(input: {
   readonly previewZoomReapplies?: number[];
   readonly onReveal?: (window: Electron.BrowserWindow) => void;
   readonly focusedWindow?: Electron.BrowserWindow;
+  readonly environment?: Partial<DesktopEnvironment.MakeDesktopEnvironmentInput>;
 }) {
   let desktopSettings = input.desktopSettings ?? DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS;
   const layerDesktopAppSettings = Layer.succeed(DesktopAppSettings.DesktopAppSettings, {
@@ -298,7 +306,7 @@ function layerTest(input: {
           recordMetrics: () => Effect.void,
           shutdown: Effect.void,
         }),
-        layerDesktopEnvironment,
+        input.environment ? makeEnvironmentLayer(input.environment) : layerDesktopEnvironment,
         layerDesktopAppSettings,
         layerDesktopClientSettings,
         layerDesktopServerExposure,
@@ -455,6 +463,39 @@ const captureOne = DesktopSnapShotId.make("11111111-1111-4111-8111-111111111111"
 const captureTwo = DesktopSnapShotId.make("22222222-2222-4222-8222-222222222222");
 
 describe("DesktopWindow", () => {
+  it.effect("publishes a packaged Windows taskbar icon and a quoted relaunch command", () =>
+    Effect.gen(function* () {
+      const fake = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const executable = "E:\\Program Files\\T3 Code\\T3 Code (Nightly).exe";
+      yield* Effect.gen(function* () {
+        const windows = yield* DesktopWindow.DesktopWindow;
+        yield* windows.createMain;
+        assert.deepEqual(fake.setAppDetails.mock.calls[0]?.[0], {
+          appId: "com.t3tools.t3code",
+          appIconPath: executable,
+          appIconIndex: 0,
+          relaunchCommand: `"${executable}"`,
+          relaunchDisplayName: "T3 Code (Nightly)",
+        });
+      }).pipe(
+        Effect.provide(
+          layerTest({
+            window: fake.window,
+            createCount,
+            mainWindow,
+            environment: {
+              platform: "win32",
+              isPackaged: true,
+              appVersion: "0.1.3-nightly.20261023.3580",
+            },
+          }),
+        ),
+        Effect.provideService(HostProcess.ExecutablePath, executable),
+      );
+    }),
+  );
   it("restores bounds only when the window fits within a connected display", () => {
     const persistedBounds = { x: 2040, y: 80, width: 1320, height: 880 };
     const displays = [

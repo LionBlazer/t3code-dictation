@@ -9,6 +9,7 @@ import * as Ref from "effect/Ref";
 import * as Electron from "electron";
 
 import { type DesktopSnapShotEvent, DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import * as DesktopAssets from "../app/DesktopAssets.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
@@ -289,6 +290,7 @@ function bindFirstRevealTrigger(
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
+  const executablePath = yield* HostProcess.ExecutablePath;
   const desktopState = yield* DesktopState.DesktopState;
   const assets = yield* DesktopAssets.DesktopAssets;
   const electronMenu = yield* ElectronMenu.ElectronMenu;
@@ -414,6 +416,16 @@ export const make = Effect.gen(function* () {
       return Option.none();
     }
 
+    if (environment.platform === "win32" && environment.isPackaged) {
+      // The taskbar can retain a removed installation's icon independently of WM_SETICON.
+      window.setAppDetails({
+        appId: environment.appUserModelId,
+        appIconPath: executablePath,
+        appIconIndex: 0,
+        relaunchCommand: `"${executablePath}"`,
+        relaunchDisplayName: environment.displayName,
+      });
+    }
     yield* rendererHistory.register(window.webContents, { surface: "main" });
     if (environment.platform === "darwin") {
       window.setAutoHideCursor(false);

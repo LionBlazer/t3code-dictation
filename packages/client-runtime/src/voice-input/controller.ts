@@ -229,6 +229,8 @@ export class VoiceInputController {
   private recordingConfigured = false;
   private finishing = false;
 
+  constructor(dependencies: VoiceInputControllerDependencies);
+  constructor(dependencies: StreamingVoiceInputDependencies);
   constructor(dependencies: VoiceInputControllerDependencies | StreamingVoiceInputDependencies) {
     this.dependencies = dependencies;
   }

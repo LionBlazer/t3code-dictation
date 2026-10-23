@@ -1,4 +1,4 @@
-import type { ProviderInstanceId, VoicePolishStyle } from "@t3tools/contracts";
+import type { ProviderInstanceId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import { RemoteEnvironmentAuthorization } from "../authorization/service.ts";
 import type { PreparedConnection } from "../connection/model.ts";
@@ -48,19 +48,4 @@ export const startVoice = (
 export const stopVoice = (prepared: PreparedConnection, sessionId: string) =>
   requestVoice(prepared, "stop", ({ client, headers }) =>
     client.stop({ headers, payload: { sessionId } }),
-  );
-
-export const finishVoice = (prepared: PreparedConnection, sessionId: string, text: string) =>
-  requestVoice(prepared, "finish", ({ client, headers }) =>
-    client.finish({ headers, payload: { sessionId, text } }),
-  );
-
-export const polishVoice = (
-  prepared: PreparedConnection,
-  instanceId: ProviderInstanceId,
-  text: string,
-  style: VoicePolishStyle,
-) =>
-  requestVoice(prepared, "polish", ({ client, headers }) =>
-    client.polish({ headers, payload: { instanceId, text, style } }),
   );

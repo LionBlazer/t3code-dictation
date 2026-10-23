@@ -49,10 +49,9 @@ export const IDLE_COMPOSER_VOICE_STATE: VoiceInputState = {
   errorAction: null,
 };
 
-export const VOICE_CODEX_LOGIN_DISABLED_REASON = "Sign in with `codex login`";
+const VOICE_CODEX_LOGIN_DISABLED_REASON = "Sign in with `codex login`";
 
-export const VOICE_COMPOSER_BUSY_DISABLED_REASON =
-  "Voice input is unavailable while the composer is busy";
+const VOICE_COMPOSER_BUSY_DISABLED_REASON = "Voice input is unavailable while the composer is busy";
 
 export function resolveVoiceMicAvailability(input: {
   readonly codexVoiceAvailable: boolean;

@@ -2,7 +2,6 @@ export {
   VoiceInputController,
   resetVoiceInputGlobalsForTests,
   VOICE_RECORDING_LIMIT_SECONDS,
-  resolveTranscriptCommit,
   voiceInputBlocksSubmission,
   type VoiceDraftSnapshot,
   type VoiceInputControllerDependencies,
@@ -22,4 +21,4 @@ export {
   type VoiceTranscriptionErrorCode,
   type VoiceTranscriptionOptions,
 } from "./transcription.ts";
-export { voiceAvailability, startVoice, stopVoice, finishVoice, polishVoice } from "./http.ts";
+export { voiceAvailability, startVoice, stopVoice } from "./http.ts";

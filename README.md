@@ -1,5 +1,18 @@
 # T3 Code
 
+This fork adds Codex subscription dictation to the chat composer, independently
+of the selected chat model. It is based on upstream Nightly
+`v0.1.3-nightly.20261023.3579`.
+
+- Dictate through a signed-in Codex account while using any chat provider.
+- Start recording locally while Codex connects, with a smooth microphone meter.
+- Send during dictation to include the final words and submit the message.
+- Dictation only; no voice conversation or automatic message sending.
+
+Windows builds are available in [this fork's releases](https://github.com/LionBlazer/t3code-dictation/releases).
+The native Codex dictation integration builds on [upstream PR #12275](https://github.com/pingdotgg/t3code/pull/12275).
+See [dictation architecture](docs/internals/dictation.md) and the original project below.
+
 T3 Code is an "agent harness control surface". It enables control of the agents on your machine with a best-in-class mobile app ([iOS](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824), [Android](https://play.google.com/store/apps/details?id=com.t3tools.t3code)), [web app](https://app.t3.codes) and [Electron-based desktop app](https://t3.codes).
 
 Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCode, and Google Antigravity. If they're set up on your computer, T3 Code can control them.

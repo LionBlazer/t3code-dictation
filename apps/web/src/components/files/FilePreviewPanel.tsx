@@ -1,4 +1,5 @@
 import { Spinner } from "~/components/ui/spinner";
+import { ExpandableFileImage } from "./ExpandableFileImage";
 import {
   AuthPreviewOperateScope,
   type EditorId,
@@ -194,17 +195,12 @@ function WorkspaceImagePreview(props: {
   }
 
   return assetUrl._tag === "Success" && imageUrl !== null ? (
-    // oxlint-disable-next-line t3code/require-centered-scroll-gutter -- The image is capped at max-h-full max-w-full, so this never scrolls.
-    <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4">
-      <MediaActions source={actionsSource}>
-        <img
-          className="max-h-full max-w-full object-contain"
-          src={imageUrl}
-          alt={props.alt}
-          onError={() => setFailedUrl(imageUrl)}
-        />
-      </MediaActions>
-    </div>
+    <ExpandableFileImage
+      src={imageUrl}
+      name={props.alt}
+      actionsSource={actionsSource}
+      onError={() => setFailedUrl(imageUrl)}
+    />
   ) : (
     <div className="flex min-h-0 flex-1 items-center justify-center text-muted-foreground">
       <Spinner size="lg" />

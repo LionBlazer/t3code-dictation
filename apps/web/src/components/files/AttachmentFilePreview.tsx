@@ -22,6 +22,7 @@ import { cn } from "~/lib/utils";
 import { AudioPreview } from "./AudioPreview";
 import { BrowserDocumentFrame } from "./BrowserDocumentFrame";
 import { DelimitedTablePreview } from "./DelimitedTablePreview";
+import { ExpandableFileImage } from "./ExpandableFileImage";
 import {
   FILE_SURFACE_SUBHEADER_CLASS,
   FileSurfaceAction,
@@ -241,15 +242,12 @@ export function AttachmentFilePreview(props: {
       />
     </div>
   ) : kind === "image" ? (
-    // oxlint-disable-next-line t3code/require-centered-scroll-gutter -- The image is capped at max-h-full max-w-full, so this never scrolls.
-    <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4">
-      <img
-        src={url}
-        alt={props.name}
-        className="max-h-full max-w-full object-contain"
-        onError={() => setError("Unable to load image.")}
-      />
-    </div>
+    <ExpandableFileImage
+      src={url}
+      name={props.name}
+      mimeType={props.mimeType}
+      onError={() => setError("Unable to load image.")}
+    />
   ) : (
     <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 px-6 text-center">
       <p className="text-sm font-medium">No preview for this file</p>

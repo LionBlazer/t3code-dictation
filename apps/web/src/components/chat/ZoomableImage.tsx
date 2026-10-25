@@ -1,20 +1,24 @@
-import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type Ref } from "react";
-
 import {
-  onWindowControlsOverlayGeometryChange,
-  windowControlsOverlayHeight,
-} from "../../lib/windowControlsOverlay";
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useRef,
+  type PointerEvent,
+  type Ref,
+} from "react";
+import { MaximizeIcon, MinusIcon, PlusIcon } from "lucide-react";
 
+import { useStableCallback } from "../../hooks/useStableCallback";
+import { observeResize } from "../../lib/observeResize";
+import { Button } from "../ui/button";
 import { AttachmentImage } from "../media/AttachmentImage";
-
-const MAX_ZOOM = 8;
-
-// The viewer lays out below the native caption strip so its controls never share a row with
-// the window buttons. ExpandedImageDialog and the media dialog viewport mirror this in CSS
-// through --native-titlebar-height.
-function readViewerSize() {
-  return { width: window.innerWidth, height: window.innerHeight - windowControlsOverlayHeight() };
-}
+import {
+  clampImageTransform,
+  fittedImageSize,
+  IMAGE_VIEWPORT_MAX_ZOOM,
+  zoomImageAt,
+  type ImageViewportTransform,
+} from "./imageViewport";
 
 export interface ZoomableImageHandle {
   pan: (key: string) => boolean;
@@ -25,113 +29,95 @@ export function ZoomableImage({
   name,
   mimeType,
   onError,
+  onBackgroundClick,
   ref,
 }: {
   src: string;
   name: string;
   mimeType?: string | undefined;
   onError: () => void;
+  onBackgroundClick?: (() => void) | undefined;
   ref?: Ref<ZoomableImageHandle>;
 }) {
   const viewportRef = useRef<HTMLDivElement>(null);
-  const [naturalSize, setNaturalSize] = useState({ width: 0, height: 0 });
-  const [viewerSize, setViewerSize] = useState(readViewerSize);
-  const [zoom, setZoom] = useState(1);
-  const zoomRef = useRef(1);
-  const anchorRef = useRef<{ x: number; y: number; clientX: number; clientY: number } | null>(null);
-  const dragRef = useRef<{
-    pointerId: number;
-    x: number;
-    y: number;
-    left: number;
-    top: number;
-  } | null>(null);
-  const suppressClickRef = useRef(false);
-  const [dragging, setDragging] = useState(false);
-  const maxHeight = Math.max(1, Math.min(viewerSize.height * 0.86, viewerSize.height - 160));
-  const fit = Math.min(
-    1,
-    (viewerSize.width * 0.92 - (viewerSize.width >= 640 ? 96 : 0)) / (naturalSize.width || 1),
-    maxHeight / (naturalSize.height || 1),
-  );
-  const width = naturalSize.width * fit * zoom;
-  const height = naturalSize.height * fit * zoom;
+  const imageRef = useRef<HTMLImageElement>(null);
+  const zoomLabelRef = useRef<HTMLSpanElement>(null);
+  const minusRef = useRef<HTMLButtonElement>(null);
+  const plusRef = useRef<HTMLButtonElement>(null);
+  const frameRef = useRef<number | null>(null);
+  const viewRef = useRef<ImageViewportTransform>({ zoom: 1, x: 0, y: 0 });
+  const sizesRef = useRef({
+    natural: { width: 0, height: 0 },
+    image: { width: 0, height: 0 },
+    viewport: { width: 0, height: 0 },
+  });
+  const pointersRef = useRef(new Map<number, { x: number; y: number }>());
+  const movedRef = useRef(false);
+  const backgroundPressRef = useRef(false);
+  const pointerStartRef = useRef({ x: 0, y: 0 });
 
-  useImperativeHandle(
-    ref,
-    () => ({
-      pan(key) {
-        const viewport = viewportRef.current;
-        if (!viewport || zoomRef.current <= 1) return false;
-        // A vertical scrollbar alone must not swallow gallery navigation.
-        if (
-          (key === "ArrowLeft" || key === "ArrowRight") &&
-          viewport.scrollWidth <= viewport.offsetWidth
-        )
-          return false;
-        switch (key) {
-          case "ArrowLeft":
-            viewport.scrollLeft -= 40;
-            break;
-          case "ArrowRight":
-            viewport.scrollLeft += 40;
-            break;
-          case "ArrowUp":
-            viewport.scrollTop -= 40;
-            break;
-          case "ArrowDown":
-            viewport.scrollTop += 40;
-            break;
-          default:
-            return false;
-        }
-        return true;
-      },
-    }),
-    [],
-  );
-
-  const changeZoom = (next: number, point?: { x: number; y: number }) => {
+  const paint = useStableCallback(() => {
     const viewport = viewportRef.current;
-    const previous = zoomRef.current;
-    const clamped = Math.min(MAX_ZOOM, Math.max(1, next));
-    if (!viewport || previous === clamped) return;
+    const image = imageRef.current;
+    if (!viewport || !image) return;
+    const view = viewRef.current;
+    image.style.transform = `translate3d(${view.x}px, ${view.y}px, 0) scale(${view.zoom})`;
+    viewport.dataset.zoom = String(view.zoom);
+    viewport.style.cursor =
+      view.zoom > 1 ? (pointersRef.current.size ? "grabbing" : "grab") : "default";
+    const { natural, image: fitted } = sizesRef.current;
+    if (zoomLabelRef.current) {
+      const percent = natural.width ? (fitted.width / natural.width) * view.zoom * 100 : 100;
+      zoomLabelRef.current.textContent = `${Math.round(percent)}%`;
+    }
+    if (minusRef.current) minusRef.current.disabled = view.zoom <= 1;
+    if (plusRef.current) plusRef.current.disabled = view.zoom >= IMAGE_VIEWPORT_MAX_ZOOM;
+  });
+
+  const changeView = useStableCallback((view: ImageViewportTransform) => {
+    const { image, viewport } = sizesRef.current;
+    viewRef.current = clampImageTransform(view, image, viewport);
+    // Only input schedules a paint. Transforming the decoded image avoids layout and React work.
+    if (frameRef.current !== null) return;
+    frameRef.current = window.requestAnimationFrame(() => {
+      frameRef.current = null;
+      paint();
+    });
+  });
+
+  const zoomTo = useStableCallback((zoom: number, point?: { x: number; y: number }) => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
     const bounds = viewport.getBoundingClientRect();
-    const x = point ? point.x - bounds.left : viewport.clientWidth / 2;
-    const y = point ? point.y - bounds.top : viewport.clientHeight / 2;
-    anchorRef.current = {
-      x: (viewport.scrollLeft + x) / previous,
-      y: (viewport.scrollTop + y) / previous,
-      clientX: bounds.left + x,
-      clientY: bounds.top + y,
-    };
-    zoomRef.current = clamped;
-    setZoom(clamped);
-  };
+    const { image, viewport: size } = sizesRef.current;
+    const anchor = point
+      ? { x: point.x - bounds.left - size.width / 2, y: point.y - bounds.top - size.height / 2 }
+      : { x: 0, y: 0 };
+    changeView(zoomImageAt(viewRef.current, zoom, anchor, image, size));
+  });
+
+  const measure = useStableCallback(() => {
+    const viewport = viewportRef.current;
+    const image = imageRef.current;
+    if (!viewport || !image) return;
+    const size = { width: viewport.clientWidth, height: viewport.clientHeight };
+    const fitted = fittedImageSize(sizesRef.current.natural, size);
+    sizesRef.current.viewport = size;
+    sizesRef.current.image = fitted;
+    image.style.width = `${fitted.width}px`;
+    image.style.height = `${fitted.height}px`;
+    image.style.marginLeft = `${-fitted.width / 2}px`;
+    image.style.marginTop = `${-fitted.height / 2}px`;
+    viewRef.current = clampImageTransform(viewRef.current, fitted, size);
+    paint();
+  });
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
-    const anchor = anchorRef.current;
-    if (!viewport || !anchor) return;
-    const bounds = viewport.getBoundingClientRect();
-    viewport.scrollLeft = anchor.x * zoom - (anchor.clientX - bounds.left);
-    viewport.scrollTop = anchor.y * zoom - (anchor.clientY - bounds.top);
-    anchorRef.current = null;
-  }, [zoom]);
-
-  useEffect(() => {
-    const resize = () => {
-      setViewerSize(readViewerSize());
-      changeZoom(1);
-    };
-    window.addEventListener("resize", resize);
-    // The caption strip can come and go around fullscreen without a matching resize event.
-    const stopOverlayListener = onWindowControlsOverlayGeometryChange(resize);
-    return () => {
-      window.removeEventListener("resize", resize);
-      stopOverlayListener();
-    };
-  }, [changeZoom]);
+    if (!viewport) return;
+    measure();
+    return observeResize(viewport, measure);
+  }, [measure]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -139,120 +125,206 @@ export function ZoomableImage({
     const wheel = (event: WheelEvent) => {
       if (event.deltaY === 0) return;
       event.preventDefault();
+      event.stopPropagation();
       const delta =
         event.deltaY *
         (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewport.clientHeight : 1);
-      changeZoom(zoomRef.current * Math.exp(-delta * (event.ctrlKey ? 0.01 : 0.002)), {
+      zoomTo(viewRef.current.zoom * Math.exp(-delta * (event.ctrlKey ? 0.01 : 0.002)), {
         x: event.clientX,
         y: event.clientY,
       });
     };
     viewport.addEventListener("wheel", wheel, { passive: false });
     return () => viewport.removeEventListener("wheel", wheel);
-  }, [changeZoom]);
+  }, [zoomTo]);
+
+  useEffect(
+    () => () => {
+      if (frameRef.current !== null) window.cancelAnimationFrame(frameRef.current);
+    },
+    [],
+  );
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      pan(key) {
+        const { image, viewport } = sizesRef.current;
+        const view = viewRef.current;
+        if (view.zoom <= 1) return false;
+        if (
+          (key === "ArrowLeft" || key === "ArrowRight") &&
+          image.width * view.zoom <= viewport.width
+        )
+          return false;
+        const direction =
+          key === "ArrowLeft"
+            ? { x: 40, y: 0 }
+            : key === "ArrowRight"
+              ? { x: -40, y: 0 }
+              : key === "ArrowUp"
+                ? { x: 0, y: 40 }
+                : key === "ArrowDown"
+                  ? { x: 0, y: -40 }
+                  : null;
+        if (!direction) return false;
+        changeView({ ...view, x: view.x + direction.x, y: view.y + direction.y });
+        return true;
+      },
+    }),
+    [changeView],
+  );
+
+  const releasePointer = (event: PointerEvent<HTMLDivElement>) => {
+    pointersRef.current.delete(event.pointerId);
+    if (event.currentTarget.hasPointerCapture(event.pointerId))
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    changeView(viewRef.current);
+  };
 
   return (
-    <div className="min-w-0">
+    <div className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col">
       <div
         ref={viewportRef}
         role="region"
         aria-label={`${name}, zoomable image`}
-        aria-description="Click to zoom in or return to fit. Scroll to zoom, drag to pan. Use Enter to toggle zoom, plus or minus to zoom, and 0 to fit."
+        aria-description="Scroll or pinch to zoom at the pointer. Drag to pan. Double-click to toggle zoom. Plus and minus zoom; 0 fits the image. Escape closes the viewer."
         tabIndex={0}
-        className="max-w-[var(--media-width)] overflow-auto overscroll-contain rounded-lg bg-background shadow-2xl ring-1 ring-border/70 outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring"
-        style={{
-          width: width || undefined,
-          height: height || undefined,
-          maxHeight,
-          cursor: zoom > 1 ? (dragging ? "grabbing" : "grab") : "zoom-in",
+        className="relative min-h-0 w-full flex-1 touch-none overflow-hidden overscroll-contain outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white/50"
+        onClick={() => {
+          if (!movedRef.current && backgroundPressRef.current) onBackgroundClick?.();
         }}
-        onClick={(event) => {
-          // Pointer capture also produces a click after dragging; leave the image zoomed.
-          if (suppressClickRef.current || event.detail > 1) return;
-          changeZoom(zoomRef.current > 1 ? 1 : 2, { x: event.clientX, y: event.clientY });
+        onDoubleClick={(event) => {
+          if (movedRef.current || backgroundPressRef.current) return;
+          event.preventDefault();
+          zoomTo(viewRef.current.zoom > 1 ? 1 : 2, { x: event.clientX, y: event.clientY });
         }}
         onKeyDown={(event) => {
           if (event.ctrlKey || event.metaKey || event.altKey) return;
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            if (!event.repeat) changeZoom(zoomRef.current > 1 ? 1 : 2);
-          } else if (event.key === "+" || event.key === "=") {
-            event.preventDefault();
-            changeZoom(zoomRef.current * 1.5);
-          } else if (event.key === "-") {
-            event.preventDefault();
-            changeZoom(zoomRef.current / 1.5);
-          } else if (event.key === "0") {
-            event.preventDefault();
-            changeZoom(1);
-          }
+          if (event.key === "+" || event.key === "=") zoomTo(viewRef.current.zoom * 1.22);
+          else if (event.key === "-") zoomTo(viewRef.current.zoom / 1.22);
+          else if (event.key === "0") zoomTo(1);
+          else if (event.key === "Enter" || event.key === " ") {
+            if (!event.repeat) zoomTo(viewRef.current.zoom > 1 ? 1 : 2);
+          } else return;
+          event.preventDefault();
+          event.stopPropagation();
         }}
         onPointerDown={(event) => {
-          if (dragRef.current) return;
-          suppressClickRef.current = false;
-          if (event.pointerType !== "mouse" || event.button !== 0 || zoomRef.current <= 1) return;
-          const viewport = event.currentTarget;
-          const bounds = viewport.getBoundingClientRect();
-          if (
-            event.clientX - bounds.left >= viewport.clientWidth ||
-            event.clientY - bounds.top >= viewport.clientHeight
-          )
-            return;
-          dragRef.current = {
-            pointerId: event.pointerId,
-            x: event.clientX,
-            y: event.clientY,
-            left: viewport.scrollLeft,
-            top: viewport.scrollTop,
-          };
-          viewport.setPointerCapture(event.pointerId);
-          setDragging(true);
+          if (event.button !== 0) return;
+          if (pointersRef.current.size === 0) {
+            movedRef.current = false;
+            backgroundPressRef.current = event.target === event.currentTarget;
+            pointerStartRef.current = { x: event.clientX, y: event.clientY };
+          }
+          pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+          event.currentTarget.setPointerCapture(event.pointerId);
+          changeView(viewRef.current);
         }}
         onPointerMove={(event) => {
-          const drag = dragRef.current;
-          if (!drag || drag.pointerId !== event.pointerId) return;
-          if (Math.hypot(event.clientX - drag.x, event.clientY - drag.y) > 4) {
-            suppressClickRef.current = true;
+          const pointers = pointersRef.current;
+          const previous = pointers.get(event.pointerId);
+          if (!previous) return;
+          if (
+            Math.hypot(
+              event.clientX - pointerStartRef.current.x,
+              event.clientY - pointerStartRef.current.y,
+            ) > 4
+          )
+            movedRef.current = true;
+          const other = [...pointers.entries()].find(([id]) => id !== event.pointerId)?.[1];
+          pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+          if (other) {
+            movedRef.current = true;
+            const distance = Math.hypot(previous.x - other.x, previous.y - other.y);
+            const nextDistance = Math.hypot(event.clientX - other.x, event.clientY - other.y);
+            if (distance > 0) {
+              zoomTo((viewRef.current.zoom * nextDistance) / distance, {
+                x: (previous.x + other.x) / 2,
+                y: (previous.y + other.y) / 2,
+              });
+              const view = viewRef.current;
+              changeView({
+                ...view,
+                x: view.x + (event.clientX - previous.x) / 2,
+                y: view.y + (event.clientY - previous.y) / 2,
+              });
+            }
+          } else {
+            const view = viewRef.current;
+            changeView({
+              ...view,
+              x: view.x + event.clientX - previous.x,
+              y: view.y + event.clientY - previous.y,
+            });
           }
-          event.currentTarget.scrollLeft = drag.left - (event.clientX - drag.x);
-          event.currentTarget.scrollTop = drag.top - (event.clientY - drag.y);
         }}
-        onPointerUp={(event) => {
-          if (dragRef.current?.pointerId !== event.pointerId) return;
-          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-            event.currentTarget.releasePointerCapture(event.pointerId);
-          }
-          dragRef.current = null;
-          setDragging(false);
-        }}
+        onPointerUp={releasePointer}
+        onPointerCancel={releasePointer}
         onLostPointerCapture={(event) => {
-          if (dragRef.current?.pointerId !== event.pointerId) return;
-          dragRef.current = null;
-          setDragging(false);
+          pointersRef.current.delete(event.pointerId);
+          changeView(viewRef.current);
         }}
       >
         <AttachmentImage
+          ref={imageRef}
           name={name}
           mimeType={mimeType}
           src={src}
           alt={name}
           draggable={false}
-          className="block max-w-none select-none"
-          style={
-            naturalSize.width ? { width, height } : { maxWidth: "var(--media-width)", maxHeight }
-          }
+          className="absolute top-1/2 left-1/2 block max-w-none origin-center select-none will-change-transform"
           onLoad={(event) => {
-            setNaturalSize({
+            sizesRef.current.natural = {
               width: event.currentTarget.naturalWidth,
               height: event.currentTarget.naturalHeight,
-            });
+            };
+            measure();
           }}
           onError={onError}
         />
       </div>
-      <span className="sr-only" aria-live="polite">
-        {Math.round(zoom * 100)}% zoom
-      </span>
+      <div
+        className="flex h-11 shrink-0 items-center justify-center gap-2 text-white"
+        role="toolbar"
+        aria-label="Image zoom controls"
+      >
+        <Button
+          ref={minusRef}
+          size="icon-sm"
+          variant="media-close"
+          aria-label="Zoom out"
+          onClick={() => zoomTo(viewRef.current.zoom / 1.22)}
+        >
+          <MinusIcon />
+        </Button>
+        <span
+          ref={zoomLabelRef}
+          className="min-w-14 text-center text-xs tabular-nums"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          100%
+        </span>
+        <Button
+          ref={plusRef}
+          size="icon-sm"
+          variant="media-close"
+          aria-label="Zoom in"
+          onClick={() => zoomTo(viewRef.current.zoom * 1.22)}
+        >
+          <PlusIcon />
+        </Button>
+        <Button
+          size="icon-sm"
+          variant="media-close"
+          aria-label="Fit image"
+          title="Fit image (0)"
+          onClick={() => zoomTo(1)}
+        >
+          <MaximizeIcon />
+        </Button>
+      </div>
     </div>
   );
 }

@@ -23,6 +23,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/reactivity";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { expandedImageKey } from "./ExpandedImagePreview";
+import { cn } from "../../lib/utils";
 
 interface ExpandedImageDialogProps {
   preview: ExpandedImagePreview;
@@ -172,10 +173,15 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
     >
       <DialogPopup
         {...composerFloatingLayerProps}
-        variant="media"
+        variant={item.type === "video" ? "media" : "media-fullscreen"}
         showCloseButton={false}
         bottomStickOnMobile={false}
-        className="row-start-1 h-full max-h-[92vh] w-[92vw] max-w-[92vw] items-center justify-center overflow-visible [--media-width:92vw] [--media-height:min(calc((100vh-var(--native-titlebar-height,0px))*0.86),calc(100vh-var(--native-titlebar-height,0px)-160px))] sm:[--media-width:calc(92vw-96px)]"
+        className={cn(
+          "row-start-1 items-center justify-center",
+          item.type === "video"
+            ? "h-full max-h-[92vh] w-[92vw] max-w-[92vw] overflow-visible [--media-width:92vw] [--media-height:min(calc((100vh-var(--native-titlebar-height,0px))*0.86),calc(100vh-var(--native-titlebar-height,0px)-160px))] sm:[--media-width:calc(92vw-96px)]"
+            : "[--media-width:100vw] [--media-height:calc(100dvh-var(--native-titlebar-height,0px)-5rem)]",
+        )}
         onKeyDown={onKeyDown}
         initialFocus={closeButtonRef}
         finalFocus={() => returnFocusTarget}
@@ -189,7 +195,7 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
           ref={closeButtonRef}
           size="icon-sm"
           variant="media-close"
-          className="absolute right-0 top-0 z-20"
+          className="absolute right-3 top-3 z-20"
           onClick={onClose}
           aria-label={`Close ${mediaLabel} preview`}
         >
@@ -208,7 +214,12 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
           </Button>
         )}
         <MediaActions source={actionsSource}>
-          <div className="relative isolate z-10 flex max-h-full max-w-[var(--media-width)] flex-col items-center">
+          <div
+            className={cn(
+              "relative isolate z-10 flex max-h-full max-w-[var(--media-width)] flex-col items-center",
+              item.type !== "video" && "h-full min-h-0 w-full pb-3",
+            )}
+          >
             {item.type === "video" ? (
               <ExpandedVideo key={index} item={item} />
             ) : showingAccessibilityDetails ? (
@@ -235,6 +246,7 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
                 name={item.name}
                 mimeType={item.mimeType}
                 onError={() => setFailedImageSrc(item.src)}
+                onBackgroundClick={onClose}
               />
             )}
             <div className="mt-2 flex max-w-[var(--media-width)] items-center justify-center gap-1.5 text-xs text-white/80 max-sm:px-10">

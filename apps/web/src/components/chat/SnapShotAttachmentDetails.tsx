@@ -18,7 +18,7 @@ export interface SnapShotAccessibilityDetails {
   format: "json" | "text";
 }
 
-export function SnapShotAccessibilityData({
+function SnapShotAccessibilityData({
   details,
   className,
 }: {
@@ -50,7 +50,7 @@ export function SnapShotAccessibilityData({
   );
 }
 
-export function snapShotAccessibilityDetails(
+function snapShotAccessibilityDetails(
   source: SnapShotSource,
 ): SnapShotAccessibilityDetails | undefined {
   if (source.accessibility?.format === "element-tree") {
@@ -71,7 +71,7 @@ function snapShotIncludesAccessibility(source: SnapShotSource): boolean {
   return Boolean(source.accessibility || source.accessibleText?.trim());
 }
 
-export function SnapShotContentsButton({
+function SnapShotContentsButton({
   source,
   className,
   side = "top",

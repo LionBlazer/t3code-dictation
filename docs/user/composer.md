@@ -324,10 +324,11 @@ If nothing on the device can show a format, save or share it to open it elsewher
 Select an image or video attachment or link to preview it. Playback support depends
 on your browser or device; save an unsupported video to open it in another app.
 
-On web and desktop, images open in a viewer that fills the app window. Scroll or
-pinch to zoom around the pointer, drag to move around the image, and use **Fit image**
-or press `0` to reset. Double-click to toggle zoom. Press `Escape` to close the viewer.
-Images in the file panel open in the same viewer when selected.
+On web and desktop, images open in a viewer that fills the app window. Hold `Ctrl`
+and scroll, or pinch, to zoom around the pointer. Drag to move around the image.
+Scroll without `Ctrl` or use the left and right arrow keys to switch images;
+switching resets the zoom. Click or press `Escape` to close the viewer. Images in
+the file panel open in the same viewer when selected.
 
 On web and desktop, right-click media to save it or copy its path or URL. On mobile,
 touch and hold an image or video thumbnail and choose **Save or share**. On iOS,

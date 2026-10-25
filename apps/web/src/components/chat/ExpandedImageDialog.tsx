@@ -1,8 +1,6 @@
 import { memo, useEffect, useRef, useState, type ReactNode, type KeyboardEvent } from "react";
 import { ChevronLeftIcon, ChevronRightIcon, XIcon } from "lucide-react";
-import { Image as ImageGlyph, Text as TextGlyph } from "lucide";
 import { Button } from "../ui/button";
-import { MorphIcon } from "~/components/MorphIcon";
 import { Dialog, DialogPopup, DialogTitle } from "../ui/dialog";
 import type { ExpandedImageItem, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { resolveExternalWebLinkHost } from "./externalLinkContextMenu";
@@ -11,13 +9,8 @@ import { OpenMediaLink } from "../media/OpenMediaLink";
 import { MediaActions, type MediaActionSource } from "../media/MediaActions";
 import { MediaVideoPlayer } from "../media/MediaVideoPlayer";
 import { isContextMenuOpen } from "../../contextMenuFallback";
-import {
-  SnapShotAccessibilityData,
-  SnapShotContentsButton,
-  snapShotAccessibilityDetails,
-} from "./SnapShotAttachmentDetails";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { ZoomableImage, type ZoomableImageHandle } from "./ZoomableImage";
+import { ZoomableImage } from "./ZoomableImage";
+import { useStableCallback } from "../../hooks/useStableCallback";
 import { composerFloatingLayerProps } from "./composerEventScope";
 import { useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/reactivity";
@@ -72,16 +65,13 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
 }: ExpandedImageDialogProps) {
   const [imageOffset, setImageOffset] = useState(0);
   const [failedImageSrc, setFailedImageSrc] = useState<string | null>(null);
-  const [accessibilityDetailsSrc, setAccessibilityDetailsSrc] = useState<string | null>(null);
-  const zoomableImageRef = useRef<ZoomableImageHandle>(null);
   const [returnFocusTarget] = useState(() =>
     document.activeElement instanceof HTMLElement ? document.activeElement : null,
   );
   const closeButtonRef = useRef<HTMLButtonElement>(null);
-  // JavaScript `%` keeps the sign of the dividend, and a negative index blanks the dialog.
+  const popupRef = useRef<HTMLDivElement>(null);
   const imageCount = preview.images.length;
-  const index =
-    imageCount > 0 ? (((preview.index + imageOffset) % imageCount) + imageCount) % imageCount : 0;
+  const index = Math.max(0, Math.min(imageCount - 1, preview.index + imageOffset));
   const item = preview.images[index];
   const source: MediaActionSource = item?.actionsSource ?? {
     kind: item?.type === "video" ? "video" : "image",
@@ -99,32 +89,24 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
       }
     : source;
 
-  const navigateImage = (direction: -1 | 1) => {
-    setImageOffset((current) => current + direction);
-  };
+  const navigateImage = useStableCallback((direction: -1 | 1) => {
+    setImageOffset((current) => {
+      const nextIndex = Math.max(0, Math.min(imageCount - 1, preview.index + current + direction));
+      return nextIndex - preview.index;
+    });
+  });
 
-  // The element that opened the preview gets focus back on close. Without
-  // this a close button click leaves focus on the unmounted dialog, and the
-  // composer that owned the opener reads that as a blur and rests.
-  const openerRef = useRef<Element | null>(null);
-  useEffect(() => {
-    openerRef.current = document.activeElement;
-    return () => {
-      const opener = openerRef.current;
-      if (opener instanceof HTMLElement && opener.isConnected) {
-        opener.focus({ preventScroll: true });
-      }
-    };
-  }, []);
+  // The host unmounts the open dialog, so restore the opener even without a close transition.
+  useEffect(
+    () => () => {
+      if (returnFocusTarget?.isConnected) returnFocusTarget.focus({ preventScroll: true });
+    },
+    [returnFocusTarget],
+  );
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.defaultPrevented || isContextMenuOpen() || event.target instanceof HTMLVideoElement)
       return;
-    if (zoomableImageRef.current?.pan(event.key)) {
-      event.preventDefault();
-      event.stopPropagation();
-      return;
-    }
     if (preview.images.length <= 1) return;
     if (event.key === "ArrowLeft") {
       event.preventDefault();
@@ -155,14 +137,6 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
     item.originalUrl && resolveExternalWebLinkHost(item.originalUrl) !== null ? (
       <OpenMediaLink originalUrl={item.originalUrl} />
     ) : null;
-  const accessibilityDetails = item.source ? snapShotAccessibilityDetails(item.source) : undefined;
-  const showingAccessibilityDetails =
-    Boolean(accessibilityDetails) && accessibilityDetailsSrc === item.src;
-  const contentsLabel = showingAccessibilityDetails
-    ? "Show screenshot"
-    : accessibilityDetails?.format === "json"
-      ? "Show accessibility JSON"
-      : "Show extracted text";
 
   return (
     <Dialog
@@ -172,6 +146,7 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
       }}
     >
       <DialogPopup
+        ref={popupRef}
         {...composerFloatingLayerProps}
         variant={item.type === "video" ? "media" : "media-fullscreen"}
         showCloseButton={false}
@@ -180,28 +155,30 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
           "row-start-1 items-center justify-center",
           item.type === "video"
             ? "h-full max-h-[92vh] w-[92vw] max-w-[92vw] overflow-visible [--media-width:92vw] [--media-height:min(calc((100vh-var(--native-titlebar-height,0px))*0.86),calc(100vh-var(--native-titlebar-height,0px)-160px))] sm:[--media-width:calc(92vw-96px)]"
-            : "[--media-width:100vw] [--media-height:calc(100dvh-var(--native-titlebar-height,0px)-5rem)]",
+            : "[--media-width:100vw] [--media-height:100dvh]",
         )}
         onKeyDown={onKeyDown}
-        initialFocus={closeButtonRef}
+        initialFocus={item.type === "video" ? closeButtonRef : popupRef}
         finalFocus={() => returnFocusTarget}
         onClick={(event) => {
           if (event.target === event.currentTarget) onClose();
         }}
       >
         <DialogTitle className="sr-only">Expanded {mediaLabel} preview</DialogTitle>
-        <Button
-          type="button"
-          ref={closeButtonRef}
-          size="icon-sm"
-          variant="media-close"
-          className="absolute right-3 top-3 z-20"
-          onClick={onClose}
-          aria-label={`Close ${mediaLabel} preview`}
-        >
-          <XIcon />
-        </Button>
-        {preview.images.length > 1 && (
+        {item.type === "video" && (
+          <Button
+            type="button"
+            ref={closeButtonRef}
+            size="icon-sm"
+            variant="media-close"
+            className="absolute right-3 top-3 z-20"
+            onClick={onClose}
+            aria-label={`Close ${mediaLabel} preview`}
+          >
+            <XIcon />
+          </Button>
+        )}
+        {item.type === "video" && preview.images.length > 1 && (
           <Button
             type="button"
             size="icon"
@@ -213,22 +190,19 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
             <ChevronLeftIcon className="size-5" />
           </Button>
         )}
-        <MediaActions source={actionsSource}>
+        <MediaActions source={actionsSource} showTooltip={item.type === "video"}>
           <div
+            onClick={() => {
+              if (item.type !== "video" && (item.src === null || failedImageSrc === item.src))
+                onClose();
+            }}
             className={cn(
               "relative isolate z-10 flex max-h-full max-w-[var(--media-width)] flex-col items-center",
-              item.type !== "video" && "h-full min-h-0 w-full pb-3",
+              item.type !== "video" && "h-full min-h-0 w-full justify-center",
             )}
           >
             {item.type === "video" ? (
               <ExpandedVideo key={index} item={item} />
-            ) : showingAccessibilityDetails ? (
-              accessibilityDetails ? (
-                <SnapShotAccessibilityData
-                  details={accessibilityDetails}
-                  className="h-[min(var(--media-height),40rem)] w-[min(var(--media-width),42rem)] transition-opacity duration-140 ease-out starting:opacity-0 rounded-lg border border-border/70 bg-background p-4 text-xs leading-5 shadow-2xl motion-reduce:transition-none"
-                />
-              ) : null
             ) : item.src === null || failedImageSrc === item.src ? (
               <ExpandedMediaFailure>
                 <p>
@@ -240,50 +214,26 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
               </ExpandedMediaFailure>
             ) : (
               <ZoomableImage
-                ref={zoomableImageRef}
                 key={`${index}:${item.src}`}
                 src={item.src}
                 name={item.name}
                 mimeType={item.mimeType}
                 onError={() => setFailedImageSrc(item.src)}
-                onBackgroundClick={onClose}
+                onClose={onClose}
+                onNavigate={navigateImage}
               />
             )}
-            <div className="mt-2 flex max-w-[var(--media-width)] items-center justify-center gap-1.5 text-xs text-white/80 max-sm:px-10">
-              <span className="truncate" aria-live="polite" aria-atomic="true">
-                {item.name}
-                {preview.images.length > 1 ? ` (${index + 1}/${preview.images.length})` : ""}
-              </span>
-              {accessibilityDetails && item.source ? (
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Button
-                        aria-label={contentsLabel}
-                        aria-pressed={showingAccessibilityDetails}
-                        onClick={() =>
-                          setAccessibilityDetailsSrc(showingAccessibilityDetails ? null : item.src)
-                        }
-                        size="icon-micro"
-                        variant="overlay"
-                      />
-                    }
-                  >
-                    <MorphIcon
-                      className="size-3"
-                      aria-hidden="true"
-                      icon={showingAccessibilityDetails ? ImageGlyph : TextGlyph}
-                    />
-                  </TooltipTrigger>
-                  <TooltipPopup side="top">{contentsLabel}</TooltipPopup>
-                </Tooltip>
-              ) : item.source ? (
-                <SnapShotContentsButton source={item.source} side="top" />
-              ) : null}
-            </div>
+            {item.type === "video" && (
+              <div className="mt-2 flex max-w-[var(--media-width)] items-center justify-center gap-1.5 text-xs text-white/80 max-sm:px-10">
+                <span className="truncate" aria-live="polite" aria-atomic="true">
+                  {item.name}
+                  {preview.images.length > 1 ? ` (${index + 1}/${preview.images.length})` : ""}
+                </span>
+              </div>
+            )}
           </div>
         </MediaActions>
-        {preview.images.length > 1 && (
+        {item.type === "video" && preview.images.length > 1 && (
           <Button
             type="button"
             size="icon"

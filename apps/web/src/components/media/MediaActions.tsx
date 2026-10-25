@@ -114,9 +114,11 @@ export function useMediaActions(source: MediaActionSource) {
 export function MediaActions({
   source,
   children,
+  showTooltip = true,
 }: {
   source: MediaActionSource;
   children: ReactElement;
+  showTooltip?: boolean;
 }) {
   const { save, copyImage, canReadMedia, assertCanReadMedia } = useMediaActions(source);
   const [tooltipOpen, setTooltipOpen] = useState(false);
@@ -205,7 +207,7 @@ export function MediaActions({
   };
 
   return (
-    <Tooltip open={tooltipOpen} onOpenChange={setTooltipOpen}>
+    <Tooltip open={showTooltip && tooltipOpen} onOpenChange={setTooltipOpen}>
       <TooltipTrigger
         render={children}
         tabIndex={0}
@@ -232,7 +234,7 @@ export function MediaActions({
           void showMenu({ x: bounds.left, y: bounds.bottom });
         }}
       />
-      <TooltipPopup variant="code">{tooltip}</TooltipPopup>
+      {showTooltip && <TooltipPopup variant="code">{tooltip}</TooltipPopup>}
     </Tooltip>
   );
 }

@@ -9,7 +9,7 @@ export interface ImageViewportTransform {
   readonly y: number;
 }
 
-export const IMAGE_VIEWPORT_MAX_ZOOM = 8;
+const IMAGE_VIEWPORT_MAX_ZOOM = 8;
 
 export function fittedImageSize(
   image: ImageViewportSize,

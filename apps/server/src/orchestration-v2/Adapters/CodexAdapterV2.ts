@@ -35,6 +35,7 @@ import {
   type ProviderSetupError,
 } from "@t3tools/contracts";
 import { SKILL_MENTION_PATTERN } from "@t3tools/shared/composerInlineTokens";
+import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
@@ -3675,6 +3676,77 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           },
         );
 
+        const buildImageViewArtifacts = Effect.fn("CodexAdapterV2.buildImageViewArtifacts")(
+          function* (
+            context: ActiveCodexTurnContext,
+            item: Extract<
+              CodexSchema.V2ItemCompletedNotification__ThreadItem,
+              { type: "imageView" }
+            >,
+            completedAt: DateTime.Utc,
+          ) {
+            const nodeId = idAllocator.derive.nodeFromProviderItem({
+              driver: CODEX_PROVIDER,
+              nativeItemId: item.id,
+            });
+            const turnItemId = idAllocator.derive.turnItemFromProviderItem({
+              driver: CODEX_PROVIDER,
+              nativeItemId: item.id,
+            });
+            const { ordinal, startedAt } = yield* resolveItemPosition(
+              context,
+              item.id,
+              completedAt,
+            );
+            const imagePath = trimText(item.path);
+            const viewedImagePath =
+              imagePath &&
+              imagePath.length <= 4096 &&
+              !/[\r\n]/.test(imagePath) &&
+              isWorkspaceImagePreviewPath(imagePath)
+                ? imagePath
+                : undefined;
+            const node: OrchestrationV2ExecutionNode = {
+              id: nodeId,
+              threadId: context.projectionThreadId,
+              runId: context.projectionRunId,
+              parentNodeId: context.itemParentNodeId,
+              rootNodeId: context.rootNodeId,
+              kind: "tool_call",
+              status: "completed",
+              countsForRun: false,
+              providerThreadId: context.providerThread.id,
+              providerTurnId: context.providerTurnId,
+              nativeItemRef: codexNativeItemRef(item.id),
+              runtimeRequestId: null,
+              checkpointScopeId: null,
+              startedAt,
+              completedAt,
+            };
+            const turnItem: OrchestrationV2TurnItem = {
+              id: turnItemId,
+              threadId: context.projectionThreadId,
+              runId: context.projectionRunId,
+              nodeId,
+              providerThreadId: context.providerThread.id,
+              providerTurnId: context.providerTurnId,
+              nativeItemRef: codexNativeItemRef(item.id),
+              parentItemId: null,
+              ordinal,
+              status: "completed",
+              title: "Viewed image",
+              startedAt,
+              completedAt,
+              updatedAt: completedAt,
+              type: "dynamic_tool",
+              toolName: "view_image",
+              input: { path: item.path },
+              ...(viewedImagePath === undefined ? {} : { viewedImagePath }),
+            };
+            return { node, turnItem };
+          },
+        );
+
         const buildWebSearchArtifacts = Effect.fn("CodexAdapterV2.buildWebSearchArtifacts")(
           function* (input: {
             readonly context: ActiveCodexTurnContext;
@@ -4992,6 +5064,26 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   yield* releaseSettledTurnIfIdle(payload.turnId);
                 }
               }
+              return;
+            }
+
+            if (payload.item.type === "imageView") {
+              // Publish after the read finishes; interrupted reads have no terminal item status.
+              const artifacts = yield* buildImageViewArtifacts(
+                context,
+                payload.item,
+                DateTime.makeUnsafe(payload.completedAtMs),
+              );
+              yield* emitProviderEvent({
+                type: "node.updated",
+                driver: CODEX_PROVIDER,
+                node: artifacts.node,
+              });
+              yield* emitProviderEvent({
+                type: "turn_item.updated",
+                driver: CODEX_PROVIDER,
+                turnItem: artifacts.turnItem,
+              });
               return;
             }
 

@@ -1782,6 +1782,117 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
+  it.effect.each([true, false])(
+    "publishes a previewable native image view with started notification: %s",
+    (withStarted) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const nativeThreadId = "image-view-thread";
+          const nativeTurnId = "image-view-turn";
+          const prompt = "Inspect the screenshot.";
+          const imagePath = withStarted
+            ? "E:/Work/OpenGothic/captures/барьер.png"
+            : "/workspace/OpenGothic/screenshot.png";
+          const item = { type: "imageView", id: "image-view-item", path: imagePath };
+          const transcript = makeCodexReplayTranscript({
+            scenario: `native-image-view-${withStarted}`,
+            entries: [
+              ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt }),
+              ...(withStarted
+                ? [
+                    {
+                      type: "emit_inbound" as const,
+                      label: "image-started",
+                      frame: {
+                        method: "item/started",
+                        params: {
+                          threadId: nativeThreadId,
+                          turnId: nativeTurnId,
+                          item,
+                          startedAtMs: 1782622440500,
+                        },
+                      },
+                    },
+                  ]
+                : []),
+              {
+                type: "emit_inbound",
+                label: "image-completed",
+                frame: {
+                  method: "item/completed",
+                  params: {
+                    threadId: nativeThreadId,
+                    turnId: nativeTurnId,
+                    item,
+                    completedAtMs: 1782622441500,
+                  },
+                },
+              },
+              {
+                type: "emit_inbound",
+                label: "turn-completed",
+                frame: {
+                  method: "turn/completed",
+                  params: {
+                    threadId: nativeThreadId,
+                    turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
+                  },
+                },
+              },
+            ],
+          });
+          const harness = yield* makeCodexReplayHarness(transcript);
+          yield* harness.runtime.startTurn(
+            makeCodexTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("image-view-attempt"),
+              text: prompt,
+            }),
+          );
+          yield* harness.firstTerminal;
+          const images = harness.events.flatMap((event) =>
+            event.type === "turn_item.updated" && event.turnItem.type === "dynamic_tool"
+              ? [event.turnItem]
+              : [],
+          );
+          assert.lengthOf(images, 1);
+          const image = images[0]!;
+          assert.equal(image.status, "completed");
+          assert.equal(image.toolName, "view_image");
+          assert.equal(image.viewedImagePath, imagePath);
+          assert.deepEqual(image.input, { path: imagePath });
+          assert.deepEqual(image.nativeItemRef, {
+            driver: CodexAdapterV2.CODEX_DRIVER_KIND,
+            nativeId: item.id,
+            strength: "strong",
+          });
+          assert.equal(
+            DateTime.formatIso(image.completedAt!),
+            DateTime.formatIso(DateTime.makeUnsafe(1782622441500)),
+          );
+          assert.equal(
+            DateTime.formatIso(image.startedAt!),
+            DateTime.formatIso(DateTime.makeUnsafe(withStarted ? 1782622440500 : 1782622441500)),
+          );
+          assert.isTrue(
+            harness.events.some(
+              (event) =>
+                event.type === "node.updated" &&
+                event.node.id === image.nodeId &&
+                event.node.status === "completed",
+            ),
+          );
+          assert.equal(harness.terminalEvents()[0]?.status, "completed");
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
+        ),
+      ),
+  );
+
   it.effect("compacts Codex with the native RPC and completes the compaction turn", () =>
     Effect.scoped(
       Effect.gen(function* () {
